@@ -39,8 +39,8 @@ if (isDevelopment) {
     allowEIO3: true
   });
   
-  httpServer.listen(5002, () => {
-    console.log('Development HTTP Server running on port 5002');
+  httpServer.listen(5001, () => {
+    console.log('Development HTTP Server running on port 5001');
   });
 } else {
   // Production: Create HTTPS server with SSL
@@ -74,8 +74,8 @@ if (isDevelopment) {
     });
     console.log('Socket.IO server initialized');
 
-    httpsServer.listen(5002, () => {
-      console.log('HTTPS Server running on port 5002');
+    httpsServer.listen(5001, () => {
+      console.log('HTTPS Server running on port 5001');
     });
   } catch (error) {
     console.error('Error starting server:', error);
