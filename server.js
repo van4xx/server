@@ -13,13 +13,13 @@ let httpsServer;
 let io;
 
 // Serve static files in production
-app.use(express.static(path.join(__dirname, '../../rulet/build')));
+app.use(express.static(path.join(__dirname, '../client/build')));
 
 // CORS configuration
 const corsOptions = {
   origin: isDevelopment 
     ? ["http://localhost:3000"] 
-    : ["https://ruletka.top", "https://www.ruletka.top", "wss://ruletka.top", "wss://www.ruletka.top"],
+    : ["https://ruletka.top", "https://www.ruletka.top", "wss://ruletka.top", "wss://www.ruletka.top", "http://ruletka.top", "http://www.ruletka.top"],
   methods: ["GET", "POST"],
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"]
@@ -84,7 +84,7 @@ if (isDevelopment) {
 
 // Handle production routing
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../../rulet/build/index.html'));
+  res.sendFile(path.join(__dirname, '../client/build/index.html'));
 });
 
 // Глобальные переменные для отслеживания пользователей
@@ -174,11 +174,14 @@ function handleDisconnect(socket) {
 
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
+  console.log('Current transport:', socket.conn.transport.name);
+  console.log('Current URL:', socket.handshake.headers.origin);
   onlineUsers++;
   io.emit('updateOnlineCount', onlineUsers);
 
   socket.on('startSearch', ({ chatMode }) => {
     console.log('Search started by:', socket.id, 'mode:', chatMode);
+    console.log('Client URL:', socket.handshake.headers.origin);
     
     // Сохраняем режим чата в сокете
     socket.chatMode = chatMode;
@@ -195,6 +198,7 @@ io.on('connection', (socket) => {
     
     console.log('Added to waiting list:', socket.id);
     console.log('Current waiting users:', Array.from(waitingUsers.keys()));
+    console.log('Waiting users details:', Array.from(waitingUsers.entries()));
 
     // Пытаемся найти партнера
     if (!findMatch(socket)) {
