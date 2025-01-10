@@ -4,14 +4,33 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+
+// Настраиваем CORS для Express
+app.use(cors({
+  origin: ['https://ruletka.top', 'http://localhost:3000'],
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
 
 const server = http.createServer(app);
+
+// Настраиваем Socket.IO с расширенными опциями CORS
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:3000", "https://ruletka.top"],
-    methods: ["GET", "POST"]
-  }
+    origin: ['https://ruletka.top', 'http://localhost:3000'],
+    methods: ['GET', 'POST'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization']
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
+
+// Добавляем базовый маршрут для проверки работы сервера
+app.get('/', (req, res) => {
+  res.send('WebSocket server is running');
 });
 
 // Хранение пользователей в поиске
