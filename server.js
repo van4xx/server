@@ -4,33 +4,17 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-
-// Настраиваем CORS для Express
-app.use(cors({
-  origin: ['https://ruletka.top', 'http://localhost:3000'],
-  methods: ['GET', 'POST'],
-  credentials: true
-}));
+app.use(cors());
 
 const server = http.createServer(app);
 
-// Настраиваем Socket.IO с расширенными опциями CORS
 const io = new Server(server, {
   cors: {
-    origin: ['https://ruletka.top', 'http://localhost:3000'],
-    methods: ['GET', 'POST'],
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization']
-  },
-  transports: ['websocket', 'polling'],
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000
-});
-
-// Добавляем базовый маршрут для проверки работы сервера
-app.get('/', (req, res) => {
-  res.send('WebSocket server is running');
+    origin: "*",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["*"],
+    credentials: false
+  }
 });
 
 // Хранение пользователей в поиске
@@ -42,50 +26,90 @@ const searchingUsers = {
 // Активные соединения
 const connections = new Map();
 
+// Функция для логирования состояния
+const logState = () => {
+  console.log('\nCurrent State:');
+  console.log('Searching Users (Audio):', Array.from(searchingUsers.audio));
+  console.log('Searching Users (Video):', Array.from(searchingUsers.video));
+  console.log('Active Connections:', Array.from(connections.entries()));
+  console.log('\n');
+};
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
+  logState();
 
+  // Обработка начала поиска
   socket.on('startSearch', () => {
     const userId = socket.id;
     const mode = socket.chatMode || 'video';
-    searchingUsers[mode].add(userId);
+    console.log(`\nUser ${userId} started searching in ${mode} mode`);
+
+    // Очищаем предыдущие состояния
+    searchingUsers.audio.delete(userId);
+    searchingUsers.video.delete(userId);
     
-    // Поиск партнера
+    // Если пользователь уже в соединении, разрываем его
+    if (connections.has(userId)) {
+      const oldConnection = connections.get(userId);
+      socket.to(oldConnection.room).emit('partnerLeft');
+      connections.delete(oldConnection.partner);
+      connections.delete(userId);
+      socket.leave(oldConnection.room);
+    }
+
+    // Добавляем в поиск
+    searchingUsers[mode].add(userId);
+    console.log(`Added user ${userId} to ${mode} search queue`);
+    logState();
+
+    // Ищем партнера
     for (const partnerId of searchingUsers[mode]) {
-      if (partnerId !== userId) {
+      if (partnerId !== userId && io.sockets.sockets.has(partnerId)) {
         const room = `room_${userId}_${partnerId}`;
-        
+        console.log(`\nTrying to create room ${room}`);
+
         // Удаляем обоих из поиска
         searchingUsers[mode].delete(userId);
         searchingUsers[mode].delete(partnerId);
-        
-        // Подключаем обоих к комнате
+
+        // Подключаем к комнате
         socket.join(room);
-        io.sockets.sockets.get(partnerId)?.join(room);
-        
-        // Сохраняем информацию о соединении
+        const partnerSocket = io.sockets.sockets.get(partnerId);
+        partnerSocket.join(room);
+
+        // Сохраняем соединение
         connections.set(userId, { partner: partnerId, room });
         connections.set(partnerId, { partner: userId, room });
-        
-        // Уведомляем обоих о соединении
+
+        console.log(`Room ${room} created successfully`);
+        console.log(`Connected users: ${userId} and ${partnerId}`);
+
+        // Уведомляем обоих пользователей
         io.to(room).emit('chatStart', { room });
+        
+        logState();
         break;
       }
     }
   });
 
   socket.on('setChatMode', (mode) => {
+    console.log(`User ${socket.id} set mode to ${mode}`);
     socket.chatMode = mode;
   });
 
   socket.on('cancelSearch', () => {
     const mode = socket.chatMode || 'video';
     searchingUsers[mode].delete(socket.id);
+    console.log(`User ${socket.id} cancelled search`);
+    logState();
   });
 
   socket.on('message', (message) => {
     const connection = connections.get(socket.id);
     if (connection) {
+      console.log(`Message from ${socket.id} in room ${connection.room}`);
       io.to(connection.room).emit('message', {
         ...message,
         sender: socket.id
@@ -93,53 +117,22 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('handRaised', ({ roomId, raised }) => {
-    const connection = connections.get(socket.id);
-    if (connection) {
-      socket.to(connection.room).emit('handRaised', { raised });
-    }
-  });
-
-  socket.on('notification', ({ roomId }) => {
-    const connection = connections.get(socket.id);
-    if (connection) {
-      socket.to(connection.room).emit('notification');
-    }
-  });
-
-  socket.on('nextPartner', () => {
-    const connection = connections.get(socket.id);
-    if (connection) {
-      // Уведомляем партнера
-      socket.to(connection.room).emit('partnerLeft');
-      
-      // Очищаем старое соединение
-      const partner = connection.partner;
-      connections.delete(socket.id);
-      connections.delete(partner);
-      
-      // Покидаем комнату
-      socket.leave(connection.room);
-      
-      // Начинаем новый поиск
-      socket.emit('searchStart');
-    }
-  });
-
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-    const mode = socket.chatMode || 'video';
-    searchingUsers[mode].delete(socket.id);
+    console.log(`\nUser disconnected: ${socket.id}`);
+    
+    // Очищаем все состояния пользователя
+    searchingUsers.audio.delete(socket.id);
+    searchingUsers.video.delete(socket.id);
     
     const connection = connections.get(socket.id);
     if (connection) {
-      // Уведомляем партнера
+      console.log(`Cleaning up connection in room ${connection.room}`);
       socket.to(connection.room).emit('partnerLeft');
-      
-      // Очищаем соединение
       connections.delete(connection.partner);
       connections.delete(socket.id);
     }
+    
+    logState();
   });
 });
 
