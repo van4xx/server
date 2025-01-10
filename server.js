@@ -15,8 +15,9 @@ const io = new Server(server, {
     allowedHeaders: ["*"],
     credentials: false
   },
-  path: '/socket.io',
-  transports: ['websocket'],
+
+  path: '/socket.io/',
+  transports: ['websocket'], 
   pingTimeout: 60000,
   pingInterval: 25000
 });
