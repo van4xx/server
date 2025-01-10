@@ -10,11 +10,20 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: ["https://ruletka.top", "http://localhost:3000"],
     methods: ["GET", "POST"],
     allowedHeaders: ["*"],
     credentials: false
-  }
+  },
+  path: '/socket.io',
+  transports: ['websocket'],
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
+
+// Добавим обработчик для проверки подключения
+io.engine.on("connection_error", (err) => {
+  console.log('Connection error:', err);
 });
 
 // Хранение пользователей в поиске
