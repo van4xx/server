@@ -135,7 +135,6 @@ io.on('connection', (socket) => {
     const connection = connections.get(socket.id);
     
     if (connection) {
-      // Отправляем сигнал только партнеру
       const partnerSocket = io.sockets.sockets.get(connection.partner);
       if (partnerSocket) {
         console.log('Forwarding signal to partner:', connection.partner);
