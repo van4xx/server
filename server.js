@@ -144,6 +144,35 @@ io.on('connection', (socket) => {
     
     logState();
   });
+
+  socket.on('signal', ({ signal, room }) => {
+    console.log(`Signal from ${socket.id} in room ${room}`);
+    const connection = connections.get(socket.id);
+    if (connection) {
+      socket.to(connection.room).emit('signal', { signal });
+    }
+  });
+
+  socket.on('nextPartner', () => {
+    const connection = connections.get(socket.id);
+    if (connection) {
+      // Уведомляем партнера
+      socket.to(connection.room).emit('partnerLeft');
+      
+      // Очищаем старое соединение
+      const partner = connection.partner;
+      connections.delete(socket.id);
+      connections.delete(partner);
+      
+      // Покидаем комнату
+      socket.leave(connection.room);
+      
+      // Начинаем новый поиск
+      const mode = socket.chatMode || 'video';
+      searchingUsers[mode].add(socket.id);
+      socket.emit('searchStart');
+    }
+  });
 });
 
 const PORT = process.env.PORT || 5001;
