@@ -110,6 +110,97 @@ io.on('connection', async (socket) => {
     }
   });
 
+  socket.on('connectTransport', async ({ transportId, dtlsParameters, sender }, callback) => {
+    try {
+      const room = rooms.get(socket.id);
+      if (!room) {
+        throw new Error('Room not found');
+      }
+
+      const transport = sender
+        ? room.peers.get(socket.id).sendTransport
+        : room.peers.get(socket.id).recvTransport;
+
+      await transport.connect({ dtlsParameters });
+      callback();
+    } catch (error) {
+      console.error('Error connecting transport:', error);
+      callback({ error: error.message });
+    }
+  });
+
+  socket.on('produce', async ({ kind, rtpParameters }, callback) => {
+    try {
+      const room = rooms.get(socket.id);
+      if (!room) {
+        throw new Error('Room not found');
+      }
+
+      const transport = room.peers.get(socket.id).sendTransport;
+      const producer = await transport.produce({ kind, rtpParameters });
+
+      callback({ id: producer.id });
+
+      // Уведомляем других участников о новом продюсере
+      socket.to(room.id).emit('newProducer', {
+        producerId: producer.id,
+        kind
+      });
+    } catch (error) {
+      console.error('Error producing:', error);
+      callback({ error: error.message });
+    }
+  });
+
+  socket.on('consume', async ({ rtpCapabilities, producerId, transportId }, callback) => {
+    try {
+      const room = rooms.get(socket.id);
+      if (!room) {
+        throw new Error('Room not found');
+      }
+
+      const router = room.router;
+      const transport = room.peers.get(socket.id).recvTransport;
+
+      if (!router.canConsume({
+        producerId,
+        rtpCapabilities,
+      })) {
+        throw new Error('Cannot consume');
+      }
+
+      const consumer = await transport.consume({
+        producerId,
+        rtpCapabilities,
+        paused: true,
+      });
+
+      callback({
+        id: consumer.id,
+        producerId: consumer.producerId,
+        kind: consumer.kind,
+        rtpParameters: consumer.rtpParameters,
+      });
+    } catch (error) {
+      console.error('Error consuming:', error);
+      callback({ error: error.message });
+    }
+  });
+
+  socket.on('resume', async () => {
+    try {
+      const room = rooms.get(socket.id);
+      if (!room) {
+        throw new Error('Room not found');
+      }
+
+      const consumer = room.peers.get(socket.id).consumer;
+      await consumer.resume();
+    } catch (error) {
+      console.error('Error resuming consumer:', error);
+    }
+  });
+
   // Остальные обработчики...
 });
 
