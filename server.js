@@ -114,7 +114,9 @@ io.on('connection', async (socket) => {
   
   socket.on('createRoom', async () => {
     try {
-      const router = await worker.createRouter({ mediaCodecs });
+      const router = await worker.createRouter({ 
+        mediaCodecs: config.router.mediaCodecs
+      });
       rooms.set(socket.id, { router, peers: new Map() });
       
       const rtpCapabilities = router.rtpCapabilities;
@@ -141,7 +143,7 @@ io.on('connection', async (socket) => {
       const router = room.router;
 
       const transport = await router.createWebRtcTransport({
-        listenIps: [{ ip: '0.0.0.0', announcedIp: null }],
+        ...config.webRtcTransport,
         enableUdp: true,
         enableTcp: true,
         preferUdp: true,
@@ -165,7 +167,10 @@ io.on('connection', async (socket) => {
       if (sender) {
         room.peers.set(socket.id, { sendTransport: transport });
       } else {
-        room.peers.set(socket.id, { ...room.peers.get(socket.id), recvTransport: transport });
+        room.peers.set(socket.id, { 
+          ...room.peers.get(socket.id), 
+          recvTransport: transport 
+        });
       }
     } catch (error) {
       console.error('Error creating transport', error);
@@ -262,6 +267,27 @@ io.on('connection', async (socket) => {
     } catch (error) {
       console.error('Error resuming consumer:', error);
     }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('client disconnected', socket.id);
+    
+    const room = rooms.get(socket.id);
+    if (room) {
+      // Закрываем все транспорты
+      const peer = room.peers.get(socket.id);
+      if (peer) {
+        if (peer.sendTransport) peer.sendTransport.close();
+        if (peer.recvTransport) peer.recvTransport.close();
+      }
+      
+      // Удаляем комнату
+      rooms.delete(socket.id);
+    }
+  });
+
+  socket.on('error', (error) => {
+    console.error('Socket error:', error);
   });
 
   // Остальные обработчики...
