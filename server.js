@@ -16,35 +16,98 @@ const io = new Server(server, {
   }
 });
 
+// Конфигурация mediasoup
+const config = {
+  // Настройки Worker
+  worker: {
+    rtcMinPort: 10000,
+    rtcMaxPort: 10100,
+    logLevel: 'warn',
+    logTags: [
+      'info',
+      'ice',
+      'dtls',
+      'rtp',
+      'srtp',
+      'rtcp'
+    ],
+  },
+  // Настройки Router
+  router: {
+    mediaCodecs: [
+      {
+        kind: 'audio',
+        mimeType: 'audio/opus',
+        clockRate: 48000,
+        channels: 2
+      },
+      {
+        kind: 'video',
+        mimeType: 'video/VP8',
+        clockRate: 90000,
+        parameters: {
+          'x-google-start-bitrate': 1000
+        }
+      },
+      {
+        kind: 'video',
+        mimeType: 'video/H264',
+        clockRate: 90000,
+        parameters: {
+          'packetization-mode': 1,
+          'profile-level-id': '4d0032',
+          'level-asymmetry-allowed': 1
+        }
+      }
+    ]
+  },
+  // Настройки WebRtcTransport
+  webRtcTransport: {
+    listenIps: [
+      {
+        ip: '0.0.0.0',
+        announcedIp: process.env.ANNOUNCED_IP || '127.0.0.1' // Замените на ваш публичный IP
+      }
+    ],
+    initialAvailableOutgoingBitrate: 1000000,
+    minimumAvailableOutgoingBitrate: 600000,
+    maxSctpMessageSize: 262144,
+    maxIncomingBitrate: 1500000
+  }
+};
+
 let worker;
 const rooms = new Map();
 
-(async () => {
+// Создаем worker
+async function createWorker() {
   worker = await mediasoup.createWorker({
-    logLevel: 'debug',
-    rtcMinPort: 10000,
-    rtcMaxPort: 10100,
+    logLevel: config.worker.logLevel,
+    logTags: config.worker.logTags,
+    rtcMinPort: config.worker.rtcMinPort,
+    rtcMaxPort: config.worker.rtcMaxPort
   });
 
-  console.log('mediasoup worker created');
-})();
+  worker.on('died', () => {
+    console.error('mediasoup worker died, exiting in 2 seconds... [pid:%d]', worker.pid);
+    setTimeout(() => process.exit(1), 2000);
+  });
 
-const mediaCodecs = [
-  {
-    kind: 'audio',
-    mimeType: 'audio/opus',
-    clockRate: 48000,
-    channels: 2
-  },
-  {
-    kind: 'video',
-    mimeType: 'video/VP8',
-    clockRate: 90000,
-    parameters: {
-      'x-google-start-bitrate': 1000
-    }
+  return worker;
+}
+
+// Инициализация при запуске
+async function init() {
+  try {
+    worker = await createWorker();
+    console.log('mediasoup worker created');
+  } catch (error) {
+    console.error('Failed to create mediasoup worker:', error);
+    process.exit(1);
   }
-];
+}
+
+init();
 
 io.on('connection', async (socket) => {
   console.log('client connected', socket.id);
