@@ -53,52 +53,37 @@ io.on('connection', (socket) => {
   socket.on('startSearch', () => {
     const userId = socket.id;
     const mode = socket.chatMode || 'video';
-    console.log(`\nUser ${userId} started searching in ${mode} mode`);
-
+    console.log(`User ${userId} started searching in ${mode} mode`);
+    
     // Очищаем предыдущие состояния
     searchingUsers.audio.delete(userId);
     searchingUsers.video.delete(userId);
     
-    // Если пользователь уже в соединении, разрываем его
-    if (connections.has(userId)) {
-      const oldConnection = connections.get(userId);
-      socket.to(oldConnection.room).emit('partnerLeft');
-      connections.delete(oldConnection.partner);
-      connections.delete(userId);
-      socket.leave(oldConnection.room);
-    }
-
     // Добавляем в поиск
     searchingUsers[mode].add(userId);
-    console.log(`Added user ${userId} to ${mode} search queue`);
-    logState();
-
+    
     // Ищем партнера
     for (const partnerId of searchingUsers[mode]) {
       if (partnerId !== userId && io.sockets.sockets.has(partnerId)) {
         const room = `room_${userId}_${partnerId}`;
-        console.log(`\nTrying to create room ${room}`);
-
+        console.log(`Creating room ${room} for ${userId} and ${partnerId}`);
+        
         // Удаляем обоих из поиска
         searchingUsers[mode].delete(userId);
         searchingUsers[mode].delete(partnerId);
-
+        
         // Подключаем к комнате
         socket.join(room);
         const partnerSocket = io.sockets.sockets.get(partnerId);
         partnerSocket.join(room);
-
+        
         // Сохраняем соединение
         connections.set(userId, { partner: partnerId, room });
         connections.set(partnerId, { partner: userId, room });
-
-        console.log(`Room ${room} created successfully`);
-        console.log(`Connected users: ${userId} and ${partnerId}`);
-
-        // Уведомляем обоих пользователей
-        io.to(room).emit('chatStart', { room });
         
-        logState();
+        // Уведомляем обоих
+        io.to(room).emit('chatStart', { room });
+        console.log(`Room ${room} created and users connected`);
         break;
       }
     }
@@ -146,10 +131,20 @@ io.on('connection', (socket) => {
   });
 
   socket.on('signal', ({ signal, room }) => {
-    console.log(`Signal from ${socket.id} in room ${room}`);
+    console.log(`Signal from ${socket.id} in room ${room}:`, signal.type);
     const connection = connections.get(socket.id);
+    
     if (connection) {
-      socket.to(connection.room).emit('signal', { signal });
+      // Отправляем сигнал только партнеру
+      const partnerSocket = io.sockets.sockets.get(connection.partner);
+      if (partnerSocket) {
+        console.log('Forwarding signal to partner:', connection.partner);
+        partnerSocket.emit('signal', { signal });
+      } else {
+        console.error('Partner socket not found');
+      }
+    } else {
+      console.error('Connection not found for socket:', socket.id);
     }
   });
 
