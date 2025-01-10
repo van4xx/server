@@ -1,18 +1,32 @@
 const { PeerServer } = require('peer');
+const fs = require('fs');
+
+let sslOptions = {};
+
+// Проверяем окружение
+if (process.env.NODE_ENV === 'production') {
+  sslOptions = {
+    ssl: {
+      key: fs.readFileSync('/etc/letsencrypt/live/ruletka.top/privkey.pem'),
+      cert: fs.readFileSync('/etc/letsencrypt/live/ruletka.top/fullchain.pem')
+    }
+  };
+}
 
 const peerServer = PeerServer({
-  port: 443,
+  port: 9000,
   path: '/peerjs',
-  ssl: {
-    key: '/etc/letsencrypt/live/ruletka.top/privkey.pem',
-    cert: '/etc/letsencrypt/live/ruletka.top/fullchain.pem'
-  }
+  ...sslOptions,
+  allow_discovery: true,
+  proxied: true
 });
 
 peerServer.on('connection', (client) => {
-  console.log('Client connected:', client.id);
+  console.log('Client connected to peer server:', client.id);
 });
 
 peerServer.on('disconnect', (client) => {
-  console.log('Client disconnected:', client.id);
-}); 
+  console.log('Client disconnected from peer server:', client.id);
+});
+
+module.exports = peerServer; 
