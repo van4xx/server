@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+require('./peerServer');
 
 const app = express();
 app.use(cors());
@@ -28,36 +29,27 @@ const connections = new Map();
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('startSearch', () => {
+  socket.on('startSearch', ({ peerId }) => {
     const userId = socket.id;
     const mode = socket.chatMode || 'video';
     
-    // Очищаем предыдущие состояния
-    searchingUsers.audio.delete(userId);
-    searchingUsers.video.delete(userId);
-    
-    // Добавляем в поиск
+    searchingUsers[mode].delete(userId);
     searchingUsers[mode].add(userId);
     
-    // Ищем партнера
+    // Сохраняем peerId
+    socket.peerId = peerId;
+    
     for (const partnerId of searchingUsers[mode]) {
       if (partnerId !== userId && io.sockets.sockets.has(partnerId)) {
-        const room = `room_${userId}_${partnerId}`;
+        const partnerSocket = io.sockets.sockets.get(partnerId);
         
-        // Удаляем обоих из поиска
         searchingUsers[mode].delete(userId);
         searchingUsers[mode].delete(partnerId);
         
-        // Подключаем к комнате
-        socket.join(room);
-        io.sockets.sockets.get(partnerId).join(room);
+        // Отправляем peerId партнерам
+        socket.emit('chatStart', { partnerId: partnerSocket.peerId });
+        partnerSocket.emit('chatStart', { partnerId: peerId });
         
-        // Сохраняем соединение
-        connections.set(userId, { partner: partnerId, room });
-        connections.set(partnerId, { partner: userId, room });
-        
-        // Уведомляем обоих
-        io.to(room).emit('chatStart', { room });
         break;
       }
     }
