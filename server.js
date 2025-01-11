@@ -1,3 +1,11 @@
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
 const express = require('express');
 const https = require('https');
 const fs = require('fs');
@@ -34,6 +42,12 @@ const activeUsers = new Map();  // Активные пользователи
 
 let worker;
 let router;
+
+// В начале файла добавим отладочный режим
+const DEBUG = process.env.NODE_ENV !== 'production';
+function debug(...args) {
+  if (DEBUG) console.log(...args);
+}
 
 // Инициализация MediaSoup
 async function initializeMediasoup() {
@@ -76,70 +90,51 @@ async function createWebRtcTransport() {
 
 // Поиск партнера
 function findPartner(socket, mode) {
-  console.log('Finding partner for', socket.id, 'mode:', mode);
+  console.log(`Finding partner for ${socket.id} in mode ${mode}`);
   
-  // Проверяем, что пользователь не в поиске и не в активной комнате
-  if (waitingUsers.has(socket.id) || activeUsers.has(socket.id)) {
-    console.log('User already waiting or in room:', socket.id);
-    return false;
-  }
-
-  // Получаем всех доступных пользователей
+  // Получаем всех доступных партнеров
   const availablePartners = Array.from(waitingUsers.entries())
-    .filter(([userId, userData]) => {
-      return userId !== socket.id && // Не тот же самый пользователь
-             userData.mode === mode && // Тот же режим
-             !activeUsers.has(userId) && // Не в активной комнате
-             socket.id !== userId; // Дополнительная проверка на самого себя
-    });
+    .filter(([userId, userData]) => 
+      userId !== socket.id && 
+      userData.mode === mode && 
+      !activeUsers.has(userId)
+    );
 
   console.log('Available partners:', availablePartners.map(([id]) => id));
 
   if (availablePartners.length > 0) {
-    // Выбираем случайного партнера из доступных
+    // Выбираем случайного партнера
     const randomIndex = Math.floor(Math.random() * availablePartners.length);
     const [partnerId, partnerData] = availablePartners[randomIndex];
 
-    console.log('Selected partner:', partnerId, 'for user:', socket.id, 'in mode:', mode);
-
     // Создаем комнату
-    const roomId = `${socket.id}-${partnerId}`;
-    const room = {
-      id: roomId,
-      users: [socket.id, partnerId],
-      mode: mode,
-      createdAt: Date.now()
-    };
-    rooms.set(roomId, room);
+    const roomId = `room-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    console.log(`Creating room ${roomId} for users ${socket.id} and ${partnerId}`);
 
-    // Удаляем пользователей из ожидающих
-    waitingUsers.delete(partnerId);
+    // Удаляем обоих из ожидающих
     waitingUsers.delete(socket.id);
+    waitingUsers.delete(partnerId);
 
-    // Добавляем обоих в активные
+    // Добавляем в активные
     activeUsers.set(socket.id, { roomId, partnerId, mode });
     activeUsers.set(partnerId, { roomId, partnerId: socket.id, mode });
 
     // Уведомляем обоих пользователей
-    socket.join(roomId);
-    io.sockets.sockets.get(partnerId)?.join(roomId);
+    socket.emit('partnerFound', { partnerId, roomId });
+    io.to(partnerId).emit('partnerFound', { partnerId: socket.id, roomId });
 
-    socket.emit('roomCreated', { roomId, partnerId, mode });
-    io.to(partnerId).emit('roomCreated', { roomId, partnerId: socket.id, mode });
-
-    console.log(`Room ${roomId} created for ${mode} chat`);
+    console.log(`Room created: ${roomId}, mode: ${mode}`);
+    logServerState();
     return true;
   }
 
-  // Если партнер не найден, добавляем в ожидающие
-  console.log('No partner found, adding to waiting list:', socket.id, 'mode:', mode);
-  waitingUsers.set(socket.id, { mode, joinedAt: Date.now() });
-  socket.emit('waiting');
+  console.log(`No partners found for ${socket.id} in mode ${mode}`);
   return false;
 }
 
 io.on('connection', async (socket) => {
-  console.log('Client connected:', socket.id);
+  debug('New client connected:', socket.id);
 
   // Проверяем, нет ли уже такого пользователя
   if (activeUsers.has(socket.id)) {
@@ -151,156 +146,140 @@ io.on('connection', async (socket) => {
     activeUsers.delete(socket.id);
   }
 
-  // Обработка готовности к поиску
-  socket.on('ready', async (mode) => {
-    console.log('User ready:', socket.id, 'mode:', mode);
-    
+  // Добавляем обработчик для получения возможностей маршрутизатора
+  socket.on('getRouterRtpCapabilities', (callback) => {
+    debug('Client requesting RTP capabilities:', socket.id);
     try {
-      // Проверяем, что пользователь не в комнате и не в поиске
-      if (activeUsers.has(socket.id)) {
-        console.log('User already in room:', socket.id);
-        return;
+      if (!router) {
+        throw new Error('Router not initialized');
       }
-
-      if (waitingUsers.has(socket.id)) {
-        console.log('User already waiting:', socket.id);
-        return;
-      }
-
-      // Отправляем возможности маршрутизатора
-      socket.emit('rtpCapabilities', router.rtpCapabilities);
-
-      // Создаем транспорты
-      const producerTransport = await createWebRtcTransport();
-      const consumerTransport = await createWebRtcTransport();
-
-      socket.producerTransport = producerTransport.transport;
-      socket.consumerTransport = consumerTransport.transport;
-
-      // Отправляем параметры транспортов
-      socket.emit('transportCreated', {
-        producerTransportOptions: producerTransport.params,
-        consumerTransportOptions: consumerTransport.params
-      });
-
-      // Добавляем пользователя в список ожидающих
-      waitingUsers.set(socket.id, { 
-        mode, 
-        joinedAt: Date.now(),
-        socket: socket 
-      });
-
-      // Пытаемся найти партнера среди других ожидающих
-      const availablePartners = Array.from(waitingUsers.entries())
-        .filter(([userId, userData]) => 
-          userId !== socket.id && 
-          userData.mode === mode && 
-          !activeUsers.has(userId)
-        );
-
-      console.log('Available partners:', availablePartners.map(([id]) => id));
-
-      if (availablePartners.length > 0) {
-        // Выбираем случайного партнера
-        const randomIndex = Math.floor(Math.random() * availablePartners.length);
-        const [partnerId, partnerData] = availablePartners[randomIndex];
-
-        // Создаем комнату
-        const roomId = `room-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        const room = {
-          id: roomId,
-          users: [socket.id, partnerId],
-          mode: mode,
-          createdAt: Date.now()
-        };
-
-        console.log(`Creating room ${roomId} for users ${socket.id} and ${partnerId}`);
-
-        // Удаляем обоих из ожидающих
-        waitingUsers.delete(socket.id);
-        waitingUsers.delete(partnerId);
-
-        // Добавляем в активные
-        activeUsers.set(socket.id, { roomId, partnerId, mode });
-        activeUsers.set(partnerId, { roomId, partnerId: socket.id, mode });
-
-        // Добавляем обоих в комнату
-        socket.join(roomId);
-        partnerData.socket.join(roomId);
-
-        // Уведомляем обоих
-        socket.emit('partnerFound', { partnerId, roomId });
-        partnerData.socket.emit('partnerFound', { partnerId: socket.id, roomId });
-
-        console.log(`Room ${roomId} created for ${mode} chat between ${socket.id} and ${partnerId}`);
-      } else {
-        console.log(`User ${socket.id} added to waiting list for ${mode} mode`);
-        socket.emit('waiting');
-      }
-
+      const rtpCapabilities = router.rtpCapabilities;
+      debug('Sending RTP capabilities to client:', socket.id);
+      debug('Capabilities:', rtpCapabilities);
+      callback({ rtpCapabilities });
     } catch (error) {
-      console.error('Error in ready handler:', error);
-      socket.emit('error', { message: 'Failed to initialize connection' });
-    }
-  });
-
-  // Подключение транспорта производителя
-  socket.on('connectProducerTransport', async ({ dtlsParameters }, callback) => {
-    try {
-      await socket.producerTransport.connect({ dtlsParameters });
-      callback();
-    } catch (error) {
-      console.error('connectProducerTransport error:', error);
+      debug('Error getting RTP capabilities:', error);
       callback({ error: error.message });
     }
   });
 
-  // Подключение транспорта потребителя
-  socket.on('connectConsumerTransport', async ({ dtlsParameters }, callback) => {
+  // Обработка готовности к поиску
+  socket.on('ready', async (mode) => {
+    debug('Client ready:', socket.id, 'mode:', mode);
     try {
-      await socket.consumerTransport.connect({ dtlsParameters });
-      callback();
+      if (waitingUsers.has(socket.id) || activeUsers.has(socket.id)) {
+        debug('Client already in waiting/active list:', socket.id);
+        return;
+      }
+
+      // Добавляем в список ожидания
+      waitingUsers.set(socket.id, {
+        mode,
+        joinedAt: Date.now(),
+        socket
+      });
+      debug('Added to waiting list:', socket.id);
+
+      // Ищем партнера
+      const found = await findPartner(socket, mode);
+      if (!found) {
+        debug('No partner found, client waiting:', socket.id);
+        socket.emit('waiting');
+      }
     } catch (error) {
-      console.error('connectConsumerTransport error:', error);
+      debug('Error in ready handler:', error);
+      socket.emit('error', { message: error.message });
+    }
+  });
+
+  // Обработка подключения транспорта
+  socket.on('connectWebRtcTransport', async ({ dtlsParameters, sender }, callback) => {
+    debug('Connecting transport for client:', socket.id, 'sender:', sender);
+    try {
+      const transport = sender ? socket.producerTransport : socket.consumerTransport;
+      if (!transport) {
+        throw new Error(`${sender ? 'Producer' : 'Consumer'} transport not found`);
+      }
+      await transport.connect({ dtlsParameters });
+      debug('Transport connected successfully');
+      callback({ success: true });
+    } catch (error) {
+      debug('Error connecting transport:', error);
+      callback({ error: error.message });
+    }
+  });
+
+  // Обработка создания транспорта
+  socket.on('createWebRtcTransport', async ({ sender }, callback) => {
+    debug('Creating WebRTC transport for client:', socket.id, 'sender:', sender);
+    try {
+      const { transport, params } = await createWebRtcTransport();
+      
+      if (sender) {
+        socket.producerTransport = transport;
+        debug('Created producer transport:', transport.id);
+      } else {
+        socket.consumerTransport = transport;
+        debug('Created consumer transport:', transport.id);
+      }
+      
+      callback({ params });
+    } catch (error) {
+      debug('Error creating transport:', error);
       callback({ error: error.message });
     }
   });
 
   // Создание производителя
   socket.on('produce', async ({ kind, rtpParameters }, callback) => {
+    debug('Client producing:', socket.id, 'kind:', kind);
     try {
+      if (!socket.producerTransport) {
+        throw new Error('Producer transport not found');
+      }
       const producer = await socket.producerTransport.produce({ kind, rtpParameters });
-      
+      debug('Producer created:', producer.id);
+
       const userData = activeUsers.get(socket.id);
-      if (userData) {
-        const { partnerId } = userData;
-        io.to(partnerId).emit('newProducer', { producerId: producer.id });
+      if (userData?.partnerId) {
+        debug('Notifying partner about new producer:', userData.partnerId);
+        io.to(userData.partnerId).emit('newProducer', {
+          producerId: producer.id,
+          kind
+        });
       }
 
       callback({ id: producer.id });
     } catch (error) {
-      console.error('Produce error:', error);
+      debug('Error in produce:', error);
       callback({ error: error.message });
     }
   });
 
   // Создание потребителя
-  socket.on('consume', async ({ producerId }, callback) => {
+  socket.on('consume', async ({ producerId, rtpCapabilities }, callback) => {
+    debug('Client consuming:', socket.id, 'producer:', producerId);
     try {
+      if (!socket.consumerTransport) {
+        throw new Error('Consumer transport not found');
+      }
+
       const consumer = await socket.consumerTransport.consume({
         producerId,
-        rtpCapabilities: router.rtpCapabilities,
+        rtpCapabilities,
         paused: true
       });
 
+      debug('Consumer created:', consumer.id);
       callback({
         id: consumer.id,
         kind: consumer.kind,
         rtpParameters: consumer.rtpParameters,
-        producerId: consumer.producerId
+        producerId: consumer.producerId,
+        type: consumer.type
       });
     } catch (error) {
-      console.error('Consume error:', error);
+      debug('Error in consume:', error);
       callback({ error: error.message });
     }
   });
