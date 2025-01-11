@@ -1,12 +1,24 @@
 const express = require('express');
-const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const { ExpressPeerServer } = require('peer');
 
 const app = express();
 app.use(cors());
 
-const server = http.createServer(app);
+// SSL конфигурация
+const credentials = process.env.NODE_ENV === 'production' ? {
+  key: fs.readFileSync('/etc/letsencrypt/live/ruletka.top/privkey.pem'),
+  cert: fs.readFileSync('/etc/letsencrypt/live/ruletka.top/fullchain.pem')
+} : null;
+
+const server = process.env.NODE_ENV === 'production' 
+  ? https.createServer(credentials, app)
+  : require('http').createServer(app);
+
+// Socket.IO сервер
 const io = new Server(server, {
   cors: {
     origin: ["https://ruletka.top", "http://localhost:3000"],
@@ -14,6 +26,14 @@ const io = new Server(server, {
   },
   path: '/socket.io/'
 });
+
+// PeerJS сервер
+const peerServer = ExpressPeerServer(server, {
+  path: '/myapp',
+  ssl: credentials
+});
+
+app.use('/peerjs', peerServer);
 
 const searchingUsers = {
   audio: new Set(),
@@ -63,7 +83,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.NODE_ENV === 'production' ? 443 : 5001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 }); 
