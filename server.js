@@ -3,7 +3,6 @@ const https = require('https');
 const fs = require('fs');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const { ExpressPeerServer } = require('peer');
 
 const app = express();
 app.use(cors());
@@ -18,7 +17,6 @@ const server = process.env.NODE_ENV === 'production'
   ? https.createServer(credentials, app)
   : require('http').createServer(app);
 
-// Socket.IO сервер
 const io = new Server(server, {
   cors: {
     origin: ["https://ruletka.top", "http://localhost:3000"],
@@ -28,63 +26,77 @@ const io = new Server(server, {
   path: '/socket.io/'
 });
 
-// PeerJS сервер
-const peerServer = ExpressPeerServer(server, {
-  debug: true,
-  path: '/peerjs',
-  proxied: true,
-  ssl: credentials
-});
-
-app.use('/peerjs', peerServer);
-
-const searchingUsers = {
-  audio: new Set(),
-  video: new Set()
+const users = {
+  audio: new Map(),
+  video: new Map()
 };
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
-
-  socket.on('startSearch', ({ peerId }) => {
-    const userId = socket.id;
-    const mode = socket.chatMode || 'video';
-    
-    searchingUsers[mode].delete(userId);
-    searchingUsers[mode].add(userId);
-    
-    socket.peerId = peerId;
-    
-    for (const partnerId of searchingUsers[mode]) {
-      if (partnerId !== userId && io.sockets.sockets.has(partnerId)) {
-        const partnerSocket = io.sockets.sockets.get(partnerId);
-        
-        searchingUsers[mode].delete(userId);
-        searchingUsers[mode].delete(partnerId);
-        
-        socket.emit('chatStart', { partnerId: partnerSocket.peerId });
-        partnerSocket.emit('chatStart', { partnerId: peerId });
-        
-        break;
-      }
-    }
+  
+  socket.on('ready', (mode) => {
+    socket.mode = mode || 'video';
+    users[socket.mode].set(socket.id, { socket });
+    findPartner(socket);
   });
 
-  socket.on('setChatMode', (mode) => {
-    socket.chatMode = mode;
+  socket.on('offer', ({ to, offer }) => {
+    io.to(to).emit('offer', { from: socket.id, offer });
   });
 
-  socket.on('cancelSearch', () => {
-    const mode = socket.chatMode || 'video';
-    searchingUsers[mode].delete(socket.id);
+  socket.on('answer', ({ to, answer }) => {
+    io.to(to).emit('answer', { from: socket.id, answer });
+  });
+
+  socket.on('ice-candidate', ({ to, candidate }) => {
+    io.to(to).emit('ice-candidate', { from: socket.id, candidate });
+  });
+
+  socket.on('next', () => {
+    leaveCurrentPartner(socket);
+    findPartner(socket);
   });
 
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
-    searchingUsers.audio.delete(socket.id);
-    searchingUsers.video.delete(socket.id);
+    leaveCurrentPartner(socket);
+    users.audio.delete(socket.id);
+    users.video.delete(socket.id);
   });
 });
+
+function findPartner(socket) {
+  const mode = socket.mode || 'video';
+  const availableUsers = Array.from(users[mode].keys())
+    .filter(id => id !== socket.id && !users[mode].get(id).partnerId);
+
+  if (availableUsers.length > 0) {
+    const partnerId = availableUsers[Math.floor(Math.random() * availableUsers.length)];
+    const partner = users[mode].get(partnerId);
+
+    // Связываем пользователей
+    users[mode].get(socket.id).partnerId = partnerId;
+    partner.partnerId = socket.id;
+
+    // Уведомляем обоих пользователей
+    socket.emit('partner-found', { partnerId });
+    io.to(partnerId).emit('partner-found', { partnerId: socket.id });
+  }
+}
+
+function leaveCurrentPartner(socket) {
+  const mode = socket.mode || 'video';
+  const user = users[mode].get(socket.id);
+  
+  if (user && user.partnerId) {
+    const partner = users[mode].get(user.partnerId);
+    if (partner) {
+      delete partner.partnerId;
+      io.to(user.partnerId).emit('partner-left');
+    }
+    delete user.partnerId;
+  }
+}
 
 const PORT = 5001;
 server.listen(PORT, () => {
