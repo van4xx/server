@@ -31,7 +31,8 @@ const io = new Server(server, {
 // PeerJS сервер
 const peerServer = ExpressPeerServer(server, {
   debug: true,
-  path: '/',
+  path: '/peerjs',
+  proxied: true,
   ssl: credentials
 });
 
@@ -85,7 +86,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.NODE_ENV === 'production' ? 5001 : 5001;
+const PORT = 5001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 }); 
