@@ -22,14 +22,16 @@ const server = process.env.NODE_ENV === 'production'
 const io = new Server(server, {
   cors: {
     origin: ["https://ruletka.top", "http://localhost:3000"],
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST"],
+    credentials: true
   },
   path: '/socket.io/'
 });
 
 // PeerJS сервер
 const peerServer = ExpressPeerServer(server, {
-  path: '/myapp',
+  debug: true,
+  path: '/',
   ssl: credentials
 });
 
@@ -83,7 +85,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.NODE_ENV === 'production' ? 443 : 5001;
+const PORT = process.env.NODE_ENV === 'production' ? 5001 : 5001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 }); 
