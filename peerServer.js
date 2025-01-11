@@ -17,7 +17,6 @@ const peerServer = PeerServer({
   port: 9000,
   path: '/peerjs',
   ...sslOptions,
-  allow_discovery: true,
   proxied: true
 });
 
